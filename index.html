@@ -1,0 +1,1163 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fahrtenbuch</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #15181D;
+    color: #E9E6DF;
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+  .wrap { max-width: 480px; margin: 0 auto; min-height: 100vh; padding-bottom: 40px; }
+
+  header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 22px 20px 16px;
+    border-bottom: 1px solid #2A2E36;
+    position: sticky; top: 0; background: #15181D; z-index: 10;
+  }
+  .logo {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: #F5A623; display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: -0.01em; flex: 1; }
+
+  .tabs {
+    display: flex; gap: 2px; padding: 12px 12px 0; border-bottom: 1px solid #2A2E36;
+    overflow-x: auto;
+  }
+  .tab {
+    padding: 8px 10px; font-size: 13px; color: #8B92A5; background: none; border: none;
+    cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; flex-shrink: 0;
+  }
+  .tab.active { color: #F5A623; font-weight: 500; border-bottom-color: #F5A623; }
+
+  main { padding: 20px; }
+  .hidden { display: none !important; }
+
+  label { font-size: 12px; color: #8B92A5; display: block; margin-bottom: 4px; }
+  input, select, .field {
+    width: 100%; background: #1E222A; border: 1px solid #2A2E36; border-radius: 12px;
+    padding: 11px 13px; font-size: 14px; color: #E9E6DF; outline: none;
+    font-family: inherit;
+  }
+  input:focus, select:focus { border-color: #F5A623; }
+  .group { margin-bottom: 14px; }
+
+  /* Combobox */
+  .combo { position: relative; }
+  .combo-dropdown {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+    background: #22262F; border: 1px solid #3A3F49; border-radius: 12px;
+    max-height: 220px; overflow-y: auto; z-index: 30;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  .combo-item { padding: 10px 13px; cursor: pointer; border-bottom: 1px solid #2A2E36; }
+  .combo-item:last-child { border-bottom: none; }
+  .combo-item:hover, .combo-item.active { background: #2A2E36; }
+  .combo-item .ci-name { font-size: 13px; font-weight: 500; color: #E9E6DF; }
+  .combo-item .ci-sub { font-size: 11px; color: #8B92A5; margin-top: 1px; }
+  .combo-empty { padding: 12px 13px; font-size: 12px; color: #8B92A5; }
+
+  .hint { font-size: 12px; color: #8B92A5; margin-top: 4px; }
+
+  /* Route-Kette (Start + Ziele) */
+  .chain { position: relative; }
+  .chain-row { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 4px; }
+  .chain-dotcol { display: flex; flex-direction: column; align-items: center; width: 14px; flex-shrink: 0; padding-top: 12px; }
+  .chain-dot { width: 8px; height: 8px; border-radius: 50%; background: #F5A623; flex-shrink: 0; }
+  .chain-dot.outline { border: 2px solid #8B92A5; background: none; width: 6px; height: 6px; }
+  .chain-vline { width: 1px; flex: 1; background: #3A3F49; min-height: 28px; margin-top: 3px; }
+  .chain-body { flex: 1; min-width: 0; }
+  .chain-label { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: #8B92A5; margin-bottom: 4px; }
+  .chain-leg-row { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
+  .chain-km-input { width: 64px; flex-shrink: 0; }
+  .chain-remove { background: none; border: none; color: #8B92A5; cursor: pointer; font-size: 15px; padding: 6px 2px; flex-shrink: 0; }
+  .chain-remove:hover { color: #f87171; }
+
+  .btn-ghost {
+    width: 100%; background: none; color: #F5A623; border: 1px dashed #3A3F49; border-radius: 12px;
+    padding: 10px; font-size: 13px; font-weight: 500; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    margin: 6px 0 14px;
+  }
+  .btn-ghost:hover { border-color: #F5A623; }
+
+  .toggle-row {
+    width: 100%; display: flex; align-items: center; justify-content: space-between;
+    background: #1E222A; border: 1px solid #2A2E36; border-radius: 12px;
+    padding: 12px 13px; cursor: pointer; font-size: 14px; color: #E9E6DF;
+    margin-bottom: 14px;
+  }
+  .toggle-label { display: flex; align-items: center; gap: 8px; }
+  .switch { width: 40px; height: 24px; border-radius: 12px; background: #3A3F49; padding: 2px; display: flex; transition: background .15s; }
+  .switch.on { background: #F5A623; justify-content: flex-end; }
+  .switch .knob { width: 20px; height: 20px; border-radius: 50%; background: #15181D; }
+
+  .summary {
+    background: #1E222A; border: 1px solid #2A2E36; border-radius: 12px;
+    padding: 12px 16px; display: flex; align-items: center; margin-bottom: 14px;
+  }
+  .summary > div { flex: 1; text-align: center; }
+  .summary .sep { width: 1px; height: 32px; background: #2A2E36; }
+  .summary .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: #8B92A5; }
+  .summary .val { font-size: 16px; font-weight: 600; }
+  .summary .val.accent { color: #F5A623; font-weight: 700; }
+
+  .btn-primary {
+    width: 100%; background: #F5A623; color: #15181D; border: none; border-radius: 12px;
+    padding: 13px; font-size: 14px; font-weight: 600; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .btn-primary:disabled { background: #3A3F49; color: #8B92A5; cursor: not-allowed; }
+  .btn-secondary {
+    width: 100%; background: #1E222A; color: #E9E6DF; border: 1px solid #2A2E36; border-radius: 12px;
+    padding: 12px; font-size: 14px; font-weight: 500; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .edit-banner {
+    display: flex; align-items: center; justify-content: space-between;
+    background: rgba(245,166,35,0.1); border: 1px solid #F5A623; border-radius: 12px;
+    padding: 10px 13px; margin-bottom: 14px; font-size: 13px; color: #F5A623;
+  }
+  .edit-banner button { background: none; border: none; color: #F5A623; text-decoration: underline; cursor: pointer; font-size: 12px; padding: 0; }
+
+  .trip-card {
+    background: #1E222A; border: 1px solid #2A2E36; border-radius: 12px;
+    padding: 14px 16px; margin-bottom: 10px;
+  }
+  .trip-top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .trip-date { font-size: 11px; color: #8B92A5; margin-bottom: 4px; }
+  .trip-route { font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .trip-route .arrow { color: #F5A623; }
+  .trip-note { font-size: 12px; color: #8B92A5; margin-top: 4px; }
+  .trip-actions { display: flex; gap: 2px; flex-shrink: 0; }
+  .icon-btn { background: none; border: none; color: #8B92A5; cursor: pointer; padding: 4px 6px; font-size: 14px; }
+  .icon-btn:hover { color: #E9E6DF; }
+  .icon-btn.danger:hover { color: #f87171; }
+  .dashline { height: 2px; margin: 12px 0; background-image: repeating-linear-gradient(90deg, #3A3F49 0, #3A3F49 6px, transparent 6px, transparent 14px); }
+  .trip-stats { display: flex; justify-content: space-between; font-size: 12px; color: #8B92A5; }
+  .trip-stats .v { color: #E9E6DF; }
+  .trip-stats .total { color: #F5A623; font-weight: 600; }
+
+  .empty { text-align: center; padding: 60px 20px; color: #8B92A5; font-size: 14px; }
+
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+  .stat-card { background: #1E222A; border: 1px solid #2A2E36; border-radius: 12px; padding: 14px; }
+  .stat-clickable { cursor: pointer; transition: border-color .15s; }
+  .stat-clickable:active { border-color: #F5A623; }
+  .stat-clickable::after { content: "Details ansehen ›"; display: block; font-size: 10px; color: #565C69; margin-top: 8px; }
+  .stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: #8B92A5; margin-bottom: 4px; }
+  .stat-value { font-size: 24px; font-weight: 700; color: #F5A623; }
+  .stat-sub { font-size: 12px; color: #8B92A5; }
+
+  h2.section-title { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: #8B92A5; margin: 0 0 10px; }
+
+  .month-card { background: #1E222A; border: 1px solid #2A2E36; border-radius: 12px; overflow: hidden; margin-bottom: 8px; }
+  .month-row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: none; border: none; cursor: pointer; color: inherit; text-align: left; }
+  .month-name { width: 64px; font-size: 14px; font-weight: 500; flex-shrink: 0; }
+  .bar-track { flex: 1; height: 8px; background: #2A2E36; border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; background: #F5A623; border-radius: 4px; }
+  .month-km { width: 70px; text-align: right; font-size: 14px; font-weight: 600; flex-shrink: 0; }
+  .month-detail { padding: 4px 16px 12px; border-top: 1px solid #2A2E36; }
+  .month-trip { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #8B92A5; padding: 6px 0; gap: 8px; }
+  .month-trip .v { color: #E9E6DF; flex-shrink: 0; }
+  .month-trip .mt-text { flex: 1; min-width: 0; }
+  .month-trip .mt-dup { background: none; border: none; color: #8B92A5; cursor: pointer; padding: 2px 4px; font-size: 13px; flex-shrink: 0; }
+  .month-trip .mt-dup:hover { color: #F5A623; }
+
+  /* Adressbuch */
+  .addr-card {
+    background: #1E222A; border: 1px solid #2A2E36; border-radius: 12px;
+    padding: 14px 16px; margin-bottom: 10px;
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  }
+  .addr-name { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+  .addr-adresse { font-size: 12px; color: #8B92A5; }
+  .addr-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+  .card-form {
+    background: #1E222A; border: 1px solid #2A2E36; border-radius: 12px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  .card-form h3 { font-size: 13px; margin: 0 0 12px; font-weight: 600; }
+
+  .backup-row { display: flex; gap: 10px; }
+  .backup-row > * { flex: 1; }
+
+  footer.sub { font-size: 11px; color: #565C69; text-align: center; margin-top: 24px; }
+
+  /* Duplizieren-Modal */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100;
+    display: flex; align-items: flex-end; justify-content: center;
+  }
+  .modal-card {
+    background: #1C1F26; border: 1px solid #2A2E36; border-radius: 20px 20px 0 0;
+    width: 100%; max-width: 480px; padding: 20px; max-height: 85vh; overflow-y: auto;
+  }
+  .modal-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .modal-sub { font-size: 12px; color: #8B92A5; margin-bottom: 16px; }
+  .dup-date-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .dup-date-row input { flex: 1; }
+  .modal-actions { display: flex; gap: 10px; margin-top: 16px; }
+  .modal-actions > * { flex: 1; }
+
+  .detail-trip { background: #22262F; border: 1px solid #2A2E36; border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; }
+  .detail-trip-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .detail-trip-date { font-size: 11px; color: #8B92A5; margin-bottom: 3px; }
+  .detail-trip-chain { font-size: 13px; font-weight: 500; }
+  .detail-trip-km { font-size: 13px; font-weight: 700; color: #F5A623; white-space: nowrap; flex-shrink: 0; }
+  .detail-trip-actions { display: flex; gap: 2px; margin-top: 8px; justify-content: flex-end; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#15181D" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M8 12l3 3 5-6"/></svg>
+    </div>
+    <h1>Fahrtenbuch</h1>
+  </header>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="neu">Neue Fahrt</button>
+    <button class="tab" data-tab="fahrten">Fahrten</button>
+    <button class="tab" data-tab="adressen">Adressen</button>
+    <button class="tab" data-tab="uebersicht">Übersicht</button>
+  </div>
+
+  <main>
+    <!-- NEUE FAHRT -->
+    <section id="tab-neu">
+      <div class="edit-banner hidden" id="edit-banner">
+        <span>Du bearbeitest eine bestehende Fahrt.</span>
+        <button id="cancel-edit-btn">Abbrechen</button>
+      </div>
+
+      <div class="group">
+        <label>Datum</label>
+        <input type="date" id="f-datum">
+      </div>
+
+      <div class="chain" id="chain-container"></div>
+      <button class="btn-ghost" id="add-ziel-btn">+ Weiteres Ziel hinzufügen</button>
+
+      <button class="toggle-row" id="f-toggle">
+        <span class="toggle-label">↔ Rückfahrt zum Start</span>
+        <span class="switch on" id="f-switch"><span class="knob"></span></span>
+      </button>
+
+      <div class="group" id="rueckfahrt-group">
+        <label>Rückfahrt (km, direkt vom letzten Ziel zum Start)</label>
+        <input type="number" step="0.1" id="f-rueckfahrt" placeholder="z. B. 12.0" class="mono">
+        <div class="hint hidden" id="f-rueck-hint">Bekannte Rückstrecke gefunden – Wert automatisch eingetragen, bei Bedarf anpassen.</div>
+      </div>
+
+      <div class="summary hidden" id="f-summary">
+        <div><div class="lbl">Hin</div><div class="val mono" id="f-hin">0.0</div></div>
+        <div class="sep"></div>
+        <div><div class="lbl">Zurück</div><div class="val mono" id="f-zurueck">0.0</div></div>
+        <div class="sep"></div>
+        <div><div class="lbl" style="color:#F5A623">Gesamt</div><div class="val accent mono" id="f-gesamt">0.0</div></div>
+      </div>
+
+      <div class="group">
+        <input id="f-notiz" placeholder="Notiz (optional)">
+      </div>
+
+      <button class="btn-primary" id="f-submit" disabled>+ Fahrt eintragen</button>
+    </section>
+
+    <!-- FAHRTEN -->
+    <section id="tab-fahrten" class="hidden">
+      <div id="trips-list"></div>
+    </section>
+
+    <!-- ADRESSEN -->
+    <section id="tab-adressen" class="hidden">
+      <div class="card-form">
+        <h3 id="addr-form-title">Neue Adresse anlegen</h3>
+        <input type="hidden" id="a-edit-id">
+        <div class="group"><input id="a-name" placeholder="Name (z. B. „Kunde Müller“)"></div>
+        <div class="group"><input id="a-adresse" placeholder="Adresse (Straße, PLZ Ort)"></div>
+        <button class="btn-primary" id="a-submit">+ Adresse speichern</button>
+      </div>
+      <div id="addr-list"></div>
+    </section>
+
+    <!-- UEBERSICHT -->
+    <section id="tab-uebersicht" class="hidden">
+      <div class="stats-grid">
+        <div class="stat-card stat-clickable" id="stat-week-card">
+          <div class="stat-label">📅 Diese Woche</div>
+          <div class="stat-value" id="s-woche">0.0</div>
+          <div class="stat-sub" id="s-wochebereich">km</div>
+        </div>
+        <div class="stat-card stat-clickable" id="stat-month-card">
+          <div class="stat-label">📈 Dieser Monat</div>
+          <div class="stat-value" id="s-monat">0.0</div>
+          <div class="stat-sub" id="s-monatname">km</div>
+        </div>
+      </div>
+
+      <h2 class="section-title">Monatsverlauf</h2>
+      <div id="month-list"></div>
+
+      <h2 class="section-title" style="margin-top:20px;">Sicherung</h2>
+      <div class="backup-row">
+        <button class="btn-secondary" id="export-btn">⬇ Exportieren</button>
+        <button class="btn-secondary" id="import-btn">⬆ Importieren</button>
+      </div>
+      <input type="file" id="import-file" accept="application/json" class="hidden">
+      <div class="hint" id="backup-status" style="text-align:center; margin-top:8px;"></div>
+
+      <footer class="sub">Alle Daten bleiben lokal in diesem Browser. Exportiere regelmäßig eine Sicherung, um sie auf einem anderen Gerät wiederherzustellen.</footer>
+    </section>
+  </main>
+</div>
+
+<script>
+const MONAT_NAMEN = ["Jan","Feb","Mär","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"];
+const MONAT_NAMEN_LANG = ["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"];
+const STORAGE_KEY = "fahrtenbuch-data-v5";
+const DEFAULT_START = "Kleiststraße 1, 32657 Lemgo";
+
+let trips = [];
+let adressen = []; // {id, name, adresse}
+let routen = {};   // key "von=>nach" -> km (pro Teilstrecke gemerkt)
+let hinUndZurueck = true;
+let rueckfahrtKm = 0;
+let expandedMonth = null;
+let editingTripId = null;
+
+// form-lokaler Zustand: points[0] = Start, points[1..] = Ziele in Reihenfolge
+let formPoints = [{ ort: DEFAULT_START }, { ort: "" }];
+let formKms = [0]; // km je Teilstrecke, length = formPoints.length - 1
+
+// ---------- persistence ----------
+function load() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      trips = data.trips || [];
+      adressen = data.adressen || [];
+      routen = data.routen || {};
+      return;
+    }
+    // Migration v4 (nur ein Ziel, kein stops-array)
+    const v4 = localStorage.getItem("fahrtenbuch-data-v4");
+    if (v4) {
+      const d = JSON.parse(v4);
+      trips = (d.trips || []).map(t => ({
+        id: t.id, datum: t.datum,
+        stops: [{ort: t.start}, {ort: t.ziel}],
+        kms: [t.distanzEinfach],
+        start: t.start, ziel: t.ziel,
+        distanzEinfach: t.distanzEinfach, hinUndZurueck: t.hinUndZurueck,
+        gesamt: t.gesamt, notiz: t.notiz
+      }));
+      adressen = d.adressen || [];
+      routen = d.routen || {};
+      return;
+    }
+  } catch(e) {}
+}
+function save() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ trips, adressen, routen })); } catch(e) {}
+}
+
+// ---------- helpers ----------
+function todayISO() {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0,10);
+}
+function getISOWeek(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  const target = new Date(d.valueOf());
+  const dayNr = (d.getDay() + 6) % 7;
+  target.setDate(target.getDate() - dayNr + 3);
+  const firstThursday = new Date(target.getFullYear(), 0, 4);
+  const diff = target - firstThursday;
+  const week = 1 + Math.round(diff / (7*24*60*60*1000));
+  return target.getFullYear() + "-W" + String(week).padStart(2,"0");
+}
+function getWeekRange(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  const dayNr = (d.getDay() + 6) % 7;
+  const monday = new Date(d); monday.setDate(d.getDate() - dayNr);
+  const sunday = new Date(monday); sunday.setDate(monday.getDate()+6);
+  const fmt = x => String(x.getDate()).padStart(2,"0") + "." + String(x.getMonth()+1).padStart(2,"0") + ".";
+  return fmt(monday) + "–" + fmt(sunday);
+}
+function routeKeyOf(s,z){ return (s||"").trim().toLowerCase() + "=>" + (z||"").trim().toLowerCase(); }
+function fmtDate(dateStr){
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toLocaleDateString("de-DE",{weekday:"short",day:"2-digit",month:"2-digit",year:"numeric"});
+}
+function escapeHtml(str) {
+  const d = document.createElement("div");
+  d.textContent = str == null ? "" : str;
+  return d.innerHTML;
+}
+function comboEntries() {
+  const seen = new Set();
+  const entries = [];
+  adressen.forEach(a => {
+    entries.push({ label: a.name, sub: a.adresse, value: a.adresse });
+    seen.add(a.adresse.toLowerCase());
+  });
+  trips.forEach(t => {
+    (t.stops || []).forEach(s => {
+      if (s.ort && !seen.has(s.ort.toLowerCase())) { seen.add(s.ort.toLowerCase()); entries.push({ label: s.ort, sub: "", value: s.ort }); }
+    });
+  });
+  if (!seen.has(DEFAULT_START.toLowerCase())) entries.unshift({ label: "Start (Standard)", sub: DEFAULT_START, value: DEFAULT_START });
+  return entries;
+}
+
+// ---------- Combobox (funktioniert auch für dynamisch erzeugte Felder) ----------
+function attachCombo(wrapperEl, inputEl, onSelect) {
+  let dropdown = null;
+  function closeDropdown() { if (dropdown) { dropdown.remove(); dropdown = null; } }
+  function openDropdown() {
+    closeDropdown();
+    const q = inputEl.value.trim().toLowerCase();
+    const all = comboEntries();
+    const filtered = q ? all.filter(e => e.label.toLowerCase().includes(q) || e.sub.toLowerCase().includes(q)) : all;
+    dropdown = document.createElement("div");
+    dropdown.className = "combo-dropdown";
+    if (filtered.length === 0) {
+      dropdown.innerHTML = `<div class="combo-empty">Keine Vorschläge – Text wird frei übernommen.</div>`;
+    } else {
+      filtered.slice(0, 30).forEach(e => {
+        const item = document.createElement("div");
+        item.className = "combo-item";
+        item.innerHTML = `<div class="ci-name">${escapeHtml(e.label)}</div>${e.sub ? `<div class="ci-sub">${escapeHtml(e.sub)}</div>` : ""}`;
+        item.addEventListener("mousedown", (ev) => {
+          ev.preventDefault();
+          inputEl.value = e.value;
+          closeDropdown();
+          onSelect();
+        });
+        dropdown.appendChild(item);
+      });
+    }
+    wrapperEl.appendChild(dropdown);
+  }
+  inputEl.addEventListener("focus", openDropdown);
+  inputEl.addEventListener("click", openDropdown);
+  inputEl.addEventListener("input", () => { openDropdown(); onSelect(); });
+  inputEl.addEventListener("blur", () => { setTimeout(closeDropdown, 120); });
+  inputEl.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDropdown(); });
+}
+
+// ---------- tabs ----------
+document.querySelectorAll(".tab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(b=>b.classList.remove("active"));
+    btn.classList.add("active");
+    ["neu","fahrten","adressen","uebersicht"].forEach(id=>{
+      document.getElementById("tab-"+id).classList.toggle("hidden", id !== btn.dataset.tab);
+    });
+    if (btn.dataset.tab === "fahrten") renderTrips();
+    if (btn.dataset.tab === "adressen") renderAdressen();
+    if (btn.dataset.tab === "uebersicht") renderUebersicht();
+  });
+});
+
+// ---------- NEUE FAHRT form ----------
+const elDatum = document.getElementById("f-datum");
+const elDistanzSummary = document.getElementById("f-summary");
+const elNotiz = document.getElementById("f-notiz");
+const elSubmit = document.getElementById("f-submit");
+const elToggle = document.getElementById("f-toggle");
+const elSwitch = document.getElementById("f-switch");
+const elSummary = document.getElementById("f-summary");
+const elRueckfahrtGroup = document.getElementById("rueckfahrt-group");
+const elRueckfahrt = document.getElementById("f-rueckfahrt");
+const elRueckHint = document.getElementById("f-rueck-hint");
+const editBanner = document.getElementById("edit-banner");
+const cancelEditBtn = document.getElementById("cancel-edit-btn");
+const chainContainer = document.getElementById("chain-container");
+
+elDatum.value = todayISO();
+
+elToggle.addEventListener("click", () => {
+  hinUndZurueck = !hinUndZurueck;
+  elSwitch.classList.toggle("on", hinUndZurueck);
+  elRueckfahrtGroup.classList.toggle("hidden", !hinUndZurueck);
+  updateSummary();
+  validateForm();
+});
+
+elRueckfahrt.addEventListener("input", () => {
+  rueckfahrtKm = parseFloat((elRueckfahrt.value || "0").replace(",",".")) || 0;
+  elRueckHint.classList.add("hidden");
+  updateSummary();
+  validateForm();
+});
+
+function checkKnownReturnLeg() {
+  if (formPoints.length < 2) return;
+  const lastOrt = formPoints[formPoints.length - 1].ort;
+  const startOrt = formPoints[0].ort;
+  if (!lastOrt || !startOrt) return;
+  const key = routeKeyOf(lastOrt, startOrt);
+  if (routen[key] != null && !elRueckfahrt.value) {
+    rueckfahrtKm = routen[key];
+    elRueckfahrt.value = rueckfahrtKm;
+    elRueckHint.classList.remove("hidden");
+    updateSummary();
+    validateForm();
+  }
+}
+
+function totalKm() { return formKms.reduce((a,b) => a + (parseFloat(b) || 0), 0); }
+
+function updateSummary() {
+  const km = totalKm();
+  if (!km || km <= 0) { elSummary.classList.add("hidden"); return; }
+  elSummary.classList.remove("hidden");
+  document.getElementById("f-hin").textContent = km.toFixed(1);
+  document.getElementById("f-zurueck").textContent = (hinUndZurueck ? rueckfahrtKm : 0).toFixed(1);
+  document.getElementById("f-gesamt").textContent = (km + (hinUndZurueck ? rueckfahrtKm : 0)).toFixed(1);
+}
+
+function validateForm() {
+  const allOrteFilled = formPoints.every(p => p.ort.trim());
+  const allKmFilled = formKms.every(k => k && k > 0);
+  const rueckfahrtOk = !hinUndZurueck || (rueckfahrtKm && rueckfahrtKm > 0);
+  elSubmit.disabled = !(allOrteFilled && allKmFilled && rueckfahrtOk && formPoints.length >= 2);
+}
+
+function renderChain() {
+  let html = "";
+  formPoints.forEach((pt, i) => {
+    const isFirst = i === 0;
+    const isLast = i === formPoints.length - 1;
+    const label = isFirst ? "Start" : (formPoints.length === 2 ? "Ziel" : "Ziel " + i);
+
+    html += `<div class="chain-row" data-row="${i}">
+      <div class="chain-dotcol">
+        <div class="chain-dot ${isFirst ? "" : "outline"}"></div>
+        ${!isLast ? `<div class="chain-vline"></div>` : ""}
+      </div>
+      <div class="chain-body">
+        <div class="chain-label">${label}</div>
+        ${!isFirst ? `
+        <div class="chain-leg-row">
+          <input class="chain-km-input mono" type="number" step="0.1" placeholder="km" data-km-index="${i-1}" value="${formKms[i-1] || ""}">
+          <div class="combo" style="flex:1;" data-combo-point="${i}">
+            <input class="chain-ort-input" placeholder="Adresse" data-point-index="${i}" value="${escapeHtml(pt.ort)}">
+          </div>
+          ${formPoints.length > 2 ? `<button class="chain-remove" data-remove-point="${i}" title="Ziel entfernen">✕</button>` : `<span style="width:23px;flex-shrink:0;"></span>`}
+        </div>` : `
+        <div class="combo" data-combo-point="0">
+          <input class="chain-ort-input" placeholder="Startadresse" data-point-index="0" value="${escapeHtml(pt.ort)}">
+        </div>`}
+      </div>
+    </div>`;
+  });
+  chainContainer.innerHTML = html;
+
+  chainContainer.querySelectorAll("[data-point-index]").forEach(inputEl => {
+    const idx = parseInt(inputEl.dataset.pointIndex, 10);
+    const wrapper = inputEl.closest(".combo");
+    attachCombo(wrapper, inputEl, () => {
+      formPoints[idx].ort = inputEl.value;
+      if (idx > 0) checkKnownLeg(idx);
+      if (idx === formPoints.length - 1) checkKnownReturnLeg();
+      validateForm();
+    });
+    inputEl.addEventListener("input", () => {
+      formPoints[idx].ort = inputEl.value;
+      if (idx === formPoints.length - 1) checkKnownReturnLeg();
+    });
+  });
+  chainContainer.querySelectorAll("[data-km-index]").forEach(input => {
+    input.addEventListener("input", (e) => {
+      const idx = parseInt(e.target.dataset.kmIndex, 10);
+      formKms[idx] = parseFloat((e.target.value || "0").replace(",",".")) || 0;
+      updateSummary();
+      validateForm();
+    });
+  });
+  chainContainer.querySelectorAll("[data-remove-point]").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      const idx = parseInt(e.target.dataset.removePoint, 10);
+      formPoints.splice(idx, 1);
+      formKms.splice(idx - 1, 1);
+      renderChain();
+      updateSummary();
+      validateForm();
+    });
+  });
+}
+
+function checkKnownLeg(idx) {
+  const von = formPoints[idx-1].ort, nach = formPoints[idx].ort;
+  if (!von || !nach) return;
+  const key = routeKeyOf(von, nach);
+  if (routen[key] != null) {
+    formKms[idx-1] = routen[key];
+    renderChain();
+    updateSummary();
+    validateForm();
+  }
+}
+
+document.getElementById("add-ziel-btn").addEventListener("click", () => {
+  formPoints.push({ ort: "" });
+  formKms.push(0);
+  renderChain();
+  validateForm();
+});
+
+function resetTripForm() {
+  editingTripId = null;
+  editBanner.classList.add("hidden");
+  elSubmit.textContent = "+ Fahrt eintragen";
+  elDatum.value = todayISO();
+  formPoints = [{ ort: DEFAULT_START }, { ort: "" }];
+  formKms = [0];
+  elNotiz.value = "";
+  hinUndZurueck = true; elSwitch.classList.add("on");
+  elRueckfahrtGroup.classList.remove("hidden");
+  rueckfahrtKm = 0; elRueckfahrt.value = ""; elRueckHint.classList.add("hidden");
+  elSummary.classList.add("hidden");
+  renderChain();
+  validateForm();
+}
+
+cancelEditBtn.addEventListener("click", resetTripForm);
+
+elSubmit.addEventListener("click", () => {
+  const stops = formPoints.map(p => ({ ort: p.ort.trim() }));
+  const kms = formKms.map(k => parseFloat(k) || 0);
+  if (stops.some(s => !s.ort) || kms.some(k => !k || k <= 0)) return;
+  if (hinUndZurueck && (!rueckfahrtKm || rueckfahrtKm <= 0)) return;
+
+  for (let i = 1; i < stops.length; i++) {
+    routen[routeKeyOf(stops[i-1].ort, stops[i].ort)] = kms[i-1];
+  }
+  const total = kms.reduce((a,b)=>a+b,0);
+  const start = stops[0].ort;
+  const ziel = stops[stops.length-1].ort;
+  const rueck = hinUndZurueck ? rueckfahrtKm : 0;
+  if (hinUndZurueck) routen[routeKeyOf(ziel, start)] = rueck;
+
+  if (editingTripId) {
+    const t = trips.find(x => x.id === editingTripId);
+    if (t) {
+      t.datum = elDatum.value || todayISO();
+      t.stops = stops; t.kms = kms; t.start = start; t.ziel = ziel;
+      t.distanzEinfach = total; t.hinUndZurueck = hinUndZurueck;
+      t.rueckfahrtKm = rueck;
+      t.gesamt = total + rueck;
+      t.notiz = elNotiz.value.trim();
+    }
+  } else {
+    trips.unshift({
+      id: Date.now().toString(),
+      datum: elDatum.value || todayISO(),
+      stops, kms, start, ziel,
+      distanzEinfach: total,
+      hinUndZurueck,
+      rueckfahrtKm: rueck,
+      gesamt: total + rueck,
+      notiz: elNotiz.value.trim()
+    });
+  }
+  save();
+  resetTripForm();
+  document.querySelector('.tab[data-tab="fahrten"]').click();
+});
+
+function startEditTrip(id) {
+  const t = trips.find(x => x.id === id);
+  if (!t) return;
+  editingTripId = id;
+  editBanner.classList.remove("hidden");
+  elSubmit.textContent = "Änderungen speichern";
+  elDatum.value = t.datum;
+  formPoints = (t.stops || [{ort:t.start},{ort:t.ziel}]).map(s => ({ ort: s.ort }));
+  formKms = (t.kms || [t.distanzEinfach]).slice();
+  hinUndZurueck = t.hinUndZurueck;
+  elSwitch.classList.toggle("on", hinUndZurueck);
+  elRueckfahrtGroup.classList.toggle("hidden", !hinUndZurueck);
+  rueckfahrtKm = t.rueckfahrtKm != null ? t.rueckfahrtKm : (t.hinUndZurueck ? t.distanzEinfach : 0);
+  elRueckfahrt.value = rueckfahrtKm || "";
+  elRueckHint.classList.add("hidden");
+  elNotiz.value = t.notiz || "";
+  renderChain();
+  updateSummary();
+  validateForm();
+  document.querySelector('.tab[data-tab="neu"]').click();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+// ---------- FAHRTEN list ----------
+function renderTrips() {
+  const list = document.getElementById("trips-list");
+  if (trips.length === 0) {
+    list.innerHTML = `<div class="empty">Noch keine Fahrten eingetragen.</div>`;
+    return;
+  }
+  list.innerHTML = trips.map(t => {
+    const stops = t.stops || [{ort:t.start},{ort:t.ziel}];
+    const chainText = stops.map(s => escapeHtml(s.ort)).join(`</span><span class="arrow">→</span><span>`);
+    return `
+    <div class="trip-card">
+      <div class="trip-top">
+        <div style="flex:1; min-width:0;">
+          <div class="trip-date mono">${fmtDate(t.datum)}</div>
+          <div class="trip-route"><span>${chainText}</span></div>
+          ${t.notiz ? `<div class="trip-note">${escapeHtml(t.notiz)}</div>` : ""}
+        </div>
+        <div class="trip-actions">
+          <button class="icon-btn" data-edit="${t.id}" title="Bearbeiten">✎</button>
+          <button class="icon-btn danger" data-del="${t.id}" title="Löschen">🗑</button>
+        </div>
+      </div>
+      <div class="dashline"></div>
+      <div class="trip-stats">
+        <span>Hin <span class="v mono">${t.distanzEinfach.toFixed(1)} km</span></span>
+        <span>Zurück <span class="v mono">${(t.rueckfahrtKm != null ? t.rueckfahrtKm : (t.hinUndZurueck ? t.distanzEinfach : 0)).toFixed(1)} km</span></span>
+        <span class="total mono">Gesamt ${t.gesamt.toFixed(1)} km</span>
+      </div>
+    </div>`;
+  }).join("");
+
+  list.querySelectorAll("[data-edit]").forEach(btn => {
+    btn.addEventListener("click", () => startEditTrip(btn.dataset.edit));
+  });
+  list.querySelectorAll("[data-del]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      trips = trips.filter(t => t.id !== btn.dataset.del);
+      save();
+      renderTrips();
+    });
+  });
+}
+
+// ---------- Duplizieren-Modal ----------
+let dupTripId = null;
+let dupDates = [];
+
+function nextDay(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0,10);
+}
+
+function openDuplicateModal(tripId) {
+  const t = trips.find(x => x.id === tripId);
+  if (!t) return;
+  dupTripId = tripId;
+  dupDates = [nextDay(t.datum)];
+  renderDuplicateModal();
+}
+
+function renderDuplicateModal() {
+  const existing = document.getElementById("dup-modal-backdrop");
+  if (existing) existing.remove();
+  if (!dupTripId) return;
+
+  const t = trips.find(x => x.id === dupTripId);
+  if (!t) return;
+  const stops = t.stops || [{ort:t.start},{ort:t.ziel}];
+  const chainText = stops.map(s => s.ort).join(" → ");
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.id = "dup-modal-backdrop";
+  backdrop.innerHTML = `
+    <div class="modal-card">
+      <div class="modal-title">Fahrt duplizieren</div>
+      <div class="modal-sub">${escapeHtml(chainText)} · ${t.gesamt.toFixed(1)} km<br>Wähle einen oder mehrere Zieltage.</div>
+      <div id="dup-dates-list"></div>
+      <button class="btn-ghost" id="dup-add-date-btn" style="margin-top:2px;">+ Weiteren Tag hinzufügen</button>
+      <div class="modal-actions">
+        <button class="btn-secondary" id="dup-cancel-btn">Abbrechen</button>
+        <button class="btn-primary" id="dup-confirm-btn">Duplizieren</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeDuplicateModal(); });
+
+  renderDupDatesList();
+
+  document.getElementById("dup-add-date-btn").addEventListener("click", () => {
+    const last = dupDates[dupDates.length - 1] || todayISO();
+    dupDates.push(nextDay(last));
+    renderDupDatesList();
+  });
+  document.getElementById("dup-cancel-btn").addEventListener("click", closeDuplicateModal);
+  document.getElementById("dup-confirm-btn").addEventListener("click", confirmDuplicate);
+}
+
+function renderDupDatesList() {
+  const container = document.getElementById("dup-dates-list");
+  if (!container) return;
+  container.innerHTML = dupDates.map((d, i) => `
+    <div class="dup-date-row">
+      <input type="date" value="${d}" data-dup-index="${i}">
+      ${dupDates.length > 1 ? `<button class="chain-remove" data-dup-remove="${i}">✕</button>` : `<span style="width:23px;flex-shrink:0;"></span>`}
+    </div>
+  `).join("");
+  container.querySelectorAll("[data-dup-index]").forEach(input => {
+    input.addEventListener("change", (e) => {
+      dupDates[parseInt(e.target.dataset.dupIndex, 10)] = e.target.value;
+    });
+  });
+  container.querySelectorAll("[data-dup-remove]").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      dupDates.splice(parseInt(e.target.dataset.dupRemove, 10), 1);
+      renderDupDatesList();
+    });
+  });
+}
+
+function closeDuplicateModal() {
+  dupTripId = null;
+  dupDates = [];
+  const el = document.getElementById("dup-modal-backdrop");
+  if (el) el.remove();
+}
+
+function confirmDuplicate() {
+  const t = trips.find(x => x.id === dupTripId);
+  if (!t) { closeDuplicateModal(); return; }
+  const validDates = dupDates.filter(Boolean);
+  validDates.forEach((datum, i) => {
+    trips.unshift({
+      id: (Date.now() + i).toString(),
+      datum,
+      stops: (t.stops || [{ort:t.start},{ort:t.ziel}]).map(s => ({ ort: s.ort })),
+      kms: (t.kms || [t.distanzEinfach]).slice(),
+      start: t.start, ziel: t.ziel,
+      distanzEinfach: t.distanzEinfach,
+      hinUndZurueck: t.hinUndZurueck,
+      rueckfahrtKm: t.rueckfahrtKm != null ? t.rueckfahrtKm : (t.hinUndZurueck ? t.distanzEinfach : 0),
+      gesamt: t.gesamt,
+      notiz: t.notiz
+    });
+  });
+  save();
+  closeDuplicateModal();
+  renderTrips();
+  renderUebersicht();
+}
+
+// ---------- ADRESSEN (Adressbuch) ----------
+const aName = document.getElementById("a-name");
+const aAdresse = document.getElementById("a-adresse");
+const aEditId = document.getElementById("a-edit-id");
+const aSubmit = document.getElementById("a-submit");
+const aFormTitle = document.getElementById("addr-form-title");
+
+aSubmit.addEventListener("click", () => {
+  const name = aName.value.trim();
+  const adresse = aAdresse.value.trim();
+  if (!name || !adresse) return;
+
+  if (aEditId.value) {
+    const a = adressen.find(x => x.id === aEditId.value);
+    if (a) { a.name = name; a.adresse = adresse; }
+  } else {
+    adressen.push({ id: "adr_" + Date.now(), name, adresse });
+  }
+  save();
+  resetAddrForm();
+  renderAdressen();
+});
+
+function resetAddrForm() {
+  aEditId.value = ""; aName.value = ""; aAdresse.value = "";
+  aFormTitle.textContent = "Neue Adresse anlegen";
+  aSubmit.textContent = "+ Adresse speichern";
+}
+
+function renderAdressen() {
+  const list = document.getElementById("addr-list");
+  if (adressen.length === 0) {
+    list.innerHTML = `<div class="empty">Noch keine Adressen angelegt. Trag oben z. B. deine Kunden einmalig ein – danach tauchen sie im Dropdown bei „Neue Fahrt" auf.</div>`;
+    return;
+  }
+  list.innerHTML = adressen.map(a => `
+    <div class="addr-card">
+      <div style="min-width:0;">
+        <div class="addr-name">${escapeHtml(a.name)}</div>
+        <div class="addr-adresse">${escapeHtml(a.adresse)}</div>
+      </div>
+      <div class="addr-actions">
+        <button class="icon-btn" data-edit="${a.id}">✎</button>
+        <button class="icon-btn danger" data-del="${a.id}">🗑</button>
+      </div>
+    </div>
+  `).join("");
+
+  list.querySelectorAll("[data-edit]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const a = adressen.find(x => x.id === btn.dataset.edit);
+      if (!a) return;
+      aEditId.value = a.id; aName.value = a.name; aAdresse.value = a.adresse;
+      aFormTitle.textContent = "Adresse bearbeiten";
+      aSubmit.textContent = "Änderungen speichern";
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  });
+  list.querySelectorAll("[data-del]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      adressen = adressen.filter(x => x.id !== btn.dataset.del);
+      save();
+      renderAdressen();
+    });
+  });
+}
+
+// ---------- UEBERSICHT ----------
+function computeStats() {
+  const now = new Date();
+  const nowWeek = getISOWeek(todayISO());
+  const nowMonthKey = now.getFullYear() + "-" + String(now.getMonth()+1).padStart(2,"0");
+  let wocheKm = 0, monatKm = 0;
+  const monthTotals = {};
+  for (const t of trips) {
+    const wk = getISOWeek(t.datum);
+    const [y,m] = t.datum.split("-");
+    const mk = y + "-" + m;
+    if (wk === nowWeek) wocheKm += t.gesamt;
+    if (mk === nowMonthKey) monatKm += t.gesamt;
+    if (!monthTotals[mk]) monthTotals[mk] = { km:0, trips:[] };
+    monthTotals[mk].km += t.gesamt;
+    monthTotals[mk].trips.push(t);
+  }
+  const monthKeys = Object.keys(monthTotals).sort((a,b)=> a<b?1:-1);
+  return { wocheKm, monatKm, monthTotals, monthKeys };
+}
+
+function renderUebersicht() {
+  const stats = computeStats();
+  document.getElementById("s-woche").textContent = stats.wocheKm.toFixed(1);
+  document.getElementById("s-wochebereich").textContent = "km · " + getWeekRange(todayISO());
+  document.getElementById("s-monat").textContent = stats.monatKm.toFixed(1);
+  document.getElementById("s-monatname").textContent = "km · " + MONAT_NAMEN_LANG[new Date().getMonth()];
+
+  const monthList = document.getElementById("month-list");
+  if (stats.monthKeys.length === 0) {
+    monthList.innerHTML = `<div class="empty">Noch keine Daten.</div>`;
+  } else {
+    const maxKm = Math.max(...stats.monthKeys.map(k => stats.monthTotals[k].km), 1);
+    monthList.innerHTML = stats.monthKeys.map(mk => {
+      const [y,m] = mk.split("-");
+      const data = stats.monthTotals[mk];
+      const isOpen = expandedMonth === mk;
+      const detail = data.trips.map(t => {
+        const stops = t.stops || [{ort:t.start},{ort:t.ziel}];
+        const chain = stops.map(s => escapeHtml(s.ort)).join(" → ");
+        return `
+        <div class="month-trip">
+          <span class="mt-text">${new Date(t.datum+"T00:00:00").toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"})} — ${chain}</span>
+          <span class="v mono">${t.gesamt.toFixed(1)} km</span>
+          <button class="mt-dup" data-dup="${t.id}" title="Duplizieren">⧉</button>
+        </div>`;
+      }).join("");
+      return `
+        <div class="month-card">
+          <button class="month-row" data-mk="${mk}">
+            <div class="month-name">${MONAT_NAMEN[parseInt(m,10)-1]} ${y}</div>
+            <div class="bar-track"><div class="bar-fill" style="width:${(data.km/maxKm)*100}%"></div></div>
+            <div class="month-km mono">${data.km.toFixed(1)} km</div>
+          </button>
+          ${isOpen ? `<div class="month-detail">${detail}</div>` : ""}
+        </div>
+      `;
+    }).join("");
+
+    monthList.querySelectorAll(".month-row").forEach(btn => {
+      btn.addEventListener("click", () => {
+        expandedMonth = expandedMonth === btn.dataset.mk ? null : btn.dataset.mk;
+        renderUebersicht();
+      });
+    });
+    monthList.querySelectorAll("[data-dup]").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openDuplicateModal(btn.dataset.dup);
+      });
+    });
+  }
+}
+
+// ---------- Wochen-/Monats-Detailansicht ----------
+function openWeekDetail() {
+  const wk = getISOWeek(todayISO());
+  const list = trips.filter(t => getISOWeek(t.datum) === wk).sort((a,b) => a.datum < b.datum ? 1 : -1);
+  const total = list.reduce((sum,t) => sum + t.gesamt, 0);
+  renderDetailModal({
+    title: "Diese Woche",
+    subtitle: getWeekRange(todayISO()) + " · " + total.toFixed(1) + " km gesamt",
+    list,
+    reopen: openWeekDetail
+  });
+}
+
+function openMonthDetail() {
+  const now = new Date();
+  const mk = now.getFullYear() + "-" + String(now.getMonth()+1).padStart(2,"0");
+  const list = trips.filter(t => t.datum.slice(0,7) === mk).sort((a,b) => a.datum < b.datum ? 1 : -1);
+  const total = list.reduce((sum,t) => sum + t.gesamt, 0);
+  renderDetailModal({
+    title: MONAT_NAMEN_LANG[now.getMonth()] + " " + now.getFullYear(),
+    subtitle: total.toFixed(1) + " km gesamt · " + list.length + " Fahrt" + (list.length === 1 ? "" : "en"),
+    list,
+    reopen: openMonthDetail
+  });
+}
+
+function renderDetailModal(opts) {
+  const existing = document.getElementById("detail-modal-backdrop");
+  if (existing) existing.remove();
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.id = "detail-modal-backdrop";
+
+  const rows = opts.list.length === 0
+    ? `<div class="empty">Keine Fahrten in diesem Zeitraum.</div>`
+    : opts.list.map(t => {
+        const stops = t.stops || [{ort:t.start},{ort:t.ziel}];
+        const chain = stops.map(s => escapeHtml(s.ort)).join(" → ");
+        return `
+        <div class="detail-trip">
+          <div class="detail-trip-top">
+            <div style="min-width:0;">
+              <div class="detail-trip-date mono">${fmtDate(t.datum)}</div>
+              <div class="detail-trip-chain">${chain}</div>
+            </div>
+            <div class="detail-trip-km mono">${t.gesamt.toFixed(1)} km</div>
+          </div>
+          <div class="detail-trip-actions">
+            <button class="icon-btn" data-detail-dup="${t.id}" title="Duplizieren">⧉</button>
+            <button class="icon-btn" data-detail-edit="${t.id}" title="Bearbeiten">✎</button>
+            <button class="icon-btn danger" data-detail-del="${t.id}" title="Löschen">🗑</button>
+          </div>
+        </div>`;
+      }).join("");
+
+  backdrop.innerHTML = `
+    <div class="modal-card">
+      <div class="modal-title">${escapeHtml(opts.title)}</div>
+      <div class="modal-sub">${escapeHtml(opts.subtitle)}</div>
+      ${rows}
+      <div class="modal-actions">
+        <button class="btn-secondary" id="detail-close-btn">Schließen</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeDetailModal(); });
+  document.getElementById("detail-close-btn").addEventListener("click", closeDetailModal);
+
+  backdrop.querySelectorAll("[data-detail-dup]").forEach(btn => {
+    btn.addEventListener("click", () => { closeDetailModal(); openDuplicateModal(btn.dataset.detailDup); });
+  });
+  backdrop.querySelectorAll("[data-detail-edit]").forEach(btn => {
+    btn.addEventListener("click", () => { closeDetailModal(); startEditTrip(btn.dataset.detailEdit); });
+  });
+  backdrop.querySelectorAll("[data-detail-del]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      trips = trips.filter(t => t.id !== btn.dataset.detailDel);
+      save();
+      renderUebersicht();
+      opts.reopen();
+    });
+  });
+}
+
+function closeDetailModal() {
+  const el = document.getElementById("detail-modal-backdrop");
+  if (el) el.remove();
+}
+
+document.getElementById("stat-week-card").addEventListener("click", openWeekDetail);
+document.getElementById("stat-month-card").addEventListener("click", openMonthDetail);
+
+// ---------- Export / Import ----------
+const backupStatus = document.getElementById("backup-status");
+
+document.getElementById("export-btn").addEventListener("click", () => {
+  const data = { trips, adressen, routen, exportedAt: new Date().toISOString() };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const stamp = todayISO();
+  a.href = url;
+  a.download = `fahrtenbuch-sicherung-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  backupStatus.textContent = "Sicherung heruntergeladen.";
+});
+
+document.getElementById("import-btn").addEventListener("click", () => {
+  document.getElementById("import-file").click();
+});
+
+document.getElementById("import-file").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (evt) => {
+    try {
+      const data = JSON.parse(evt.target.result);
+      const importedTrips = data.trips || [];
+      const importedAdressen = data.adressen || [];
+      const importedRouten = data.routen || {};
+
+      const existingIds = new Set(trips.map(t => t.id));
+      importedTrips.forEach(t => { if (!existingIds.has(t.id)) trips.push(t); });
+      trips.sort((a,b) => a.datum < b.datum ? 1 : -1);
+
+      const existingAddrIds = new Set(adressen.map(a => a.id));
+      importedAdressen.forEach(a => { if (!existingAddrIds.has(a.id)) adressen.push(a); });
+
+      Object.assign(routen, importedRouten);
+
+      save();
+      renderTrips();
+      renderAdressen();
+      renderUebersicht();
+      backupStatus.textContent = `Import erfolgreich: ${importedTrips.length} Fahrten, ${importedAdressen.length} Adressen geprüft.`;
+    } catch (err) {
+      backupStatus.textContent = "Import fehlgeschlagen: ungültige Datei.";
+    }
+    e.target.value = "";
+  };
+  reader.readAsText(file);
+});
+
+// ---------- init ----------
+load();
+renderTrips();
+renderChain();
+validateForm();
+</script>
+</body>
+</html>
