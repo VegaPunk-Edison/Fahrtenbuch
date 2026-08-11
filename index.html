@@ -313,6 +313,17 @@
       <h2 class="section-title">Monatsverlauf</h2>
       <div id="month-list"></div>
 
+      <h2 class="section-title" style="margin-top:20px;">Karten-API</h2>
+      <div class="card-form">
+        <h3>OpenRouteService</h3>
+        <div class="group">
+          <label>API-Key</label>
+          <input id="settings-ors-key" placeholder="z. B. 5b3ce3597851110001cf6248...">
+        </div>
+        <button class="btn-secondary" id="settings-ors-save">Speichern</button>
+        <div class="hint" id="settings-ors-status">Mit Key werden Kilometer zwischen Adressen automatisch berechnet (Adressfeld verlassen genügt). Kostenloser Key unter openrouteservice.org.</div>
+      </div>
+
       <h2 class="section-title" style="margin-top:20px;">Sicherung</h2>
       <div class="backup-row">
         <button class="btn-secondary" id="export-btn">⬇ Exportieren</button>
@@ -335,6 +346,8 @@ const DEFAULT_START = "Kleiststraße 1, 32657 Lemgo";
 let trips = [];
 let adressen = []; // {id, name, adresse}
 let routen = {};   // key "von=>nach" -> km (pro Teilstrecke gemerkt)
+let geocodeCache = {}; // adresse (lowercase) -> {lat, lon}
+let settings = { orsApiKey: "" };
 let hinUndZurueck = true;
 let rueckfahrtKm = 0;
 let expandedMonth = null;
@@ -353,6 +366,8 @@ function load() {
       trips = data.trips || [];
       adressen = data.adressen || [];
       routen = data.routen || {};
+      geocodeCache = data.geocode || {};
+      settings = Object.assign({ orsApiKey: "" }, data.settings || {});
       return;
     }
     // Migration v4 (nur ein Ziel, kein stops-array)
@@ -374,7 +389,64 @@ function load() {
   } catch(e) {}
 }
 function save() {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ trips, adressen, routen })); } catch(e) {}
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ trips, adressen, routen, geocode: geocodeCache, settings })); } catch(e) {}
+}
+
+// ---------- Karten-APIs (Nominatim Geocoding + OpenRouteService Routing) ----------
+// Beide APIs werden direkt aus dem Browser aufgerufen, ohne eigenen Server.
+// Nominatim: kein Key nötig, Fair-Use-Limit ~1 req/s pro Client.
+// OpenRouteService: kostenloser Key nötig (siehe Übersicht > Karten-API).
+function fetchNominatimSuggestions(query) {
+  const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=0&limit=5&q=${encodeURIComponent(query)}`;
+  return fetch(url)
+    .then(r => r.ok ? r.json() : [])
+    .then(results => (results || []).map(r => ({
+      label: r.display_name.split(",")[0],
+      sub: r.display_name,
+      value: r.display_name,
+      coord: { lat: parseFloat(r.lat), lon: parseFloat(r.lon) }
+    })))
+    .catch(() => []);
+}
+
+let geocodeQueue = Promise.resolve();
+const geocodeInFlight = {}; // dedupliziert gleichzeitige Anfragen für dieselbe Adresse
+function geocode(address) {
+  const key = (address || "").trim().toLowerCase();
+  if (!key) return Promise.resolve(null);
+  if (geocodeCache[key]) return Promise.resolve(geocodeCache[key]);
+  if (geocodeInFlight[key]) return geocodeInFlight[key];
+  const result = geocodeQueue
+    .then(() => new Promise(resolve => setTimeout(resolve, 1100)))
+    .then(() => fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address)}`))
+    .then(r => r.ok ? r.json() : [])
+    .then(results => {
+      if (!results || !results[0]) return null;
+      const coord = { lat: parseFloat(results[0].lat), lon: parseFloat(results[0].lon) };
+      geocodeCache[key] = coord;
+      save();
+      return coord;
+    })
+    .catch(() => null)
+    .finally(() => { delete geocodeInFlight[key]; });
+  geocodeQueue = result;
+  geocodeInFlight[key] = result;
+  return result;
+}
+
+function calcRouteDistanceKm(von, nach) {
+  if (!settings.orsApiKey) return Promise.resolve(null);
+  return Promise.all([geocode(von), geocode(nach)]).then(([a, b]) => {
+    if (!a || !b) return null;
+    const url = `https://api.openrouteservice.org/v2/directions/driving-car?api_key=${encodeURIComponent(settings.orsApiKey)}&start=${a.lon},${a.lat}&end=${b.lon},${b.lat}`;
+    return fetch(url)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        const meters = data && data.features && data.features[0] && data.features[0].properties.summary.distance;
+        return meters != null ? Math.round(meters / 100) / 10 : null;
+      })
+      .catch(() => null);
+  });
 }
 
 // ---------- helpers ----------
@@ -430,9 +502,30 @@ function comboEntries() {
 // ---------- Combobox (funktioniert auch für dynamisch erzeugte Felder) ----------
 function attachCombo(wrapperEl, inputEl, onSelect) {
   let dropdown = null;
-  function closeDropdown() { if (dropdown) { dropdown.remove(); dropdown = null; } }
+  let debounceTimer = null;
+  let requestToken = 0;
+
+  function closeDropdown() {
+    if (dropdown) { dropdown.remove(); dropdown = null; }
+    if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+    requestToken++;
+  }
+  function addItem(entry) {
+    const item = document.createElement("div");
+    item.className = "combo-item";
+    item.innerHTML = `<div class="ci-name">${escapeHtml(entry.label)}</div>${entry.sub ? `<div class="ci-sub">${escapeHtml(entry.sub)}</div>` : ""}`;
+    item.addEventListener("mousedown", (ev) => {
+      ev.preventDefault();
+      inputEl.value = entry.value;
+      if (entry.coord) geocodeCache[entry.value.trim().toLowerCase()] = entry.coord;
+      closeDropdown();
+      onSelect();
+    });
+    dropdown.appendChild(item);
+  }
   function openDropdown() {
     closeDropdown();
+    const myToken = requestToken;
     const q = inputEl.value.trim().toLowerCase();
     const all = comboEntries();
     const filtered = q ? all.filter(e => e.label.toLowerCase().includes(q) || e.sub.toLowerCase().includes(q)) : all;
@@ -441,20 +534,24 @@ function attachCombo(wrapperEl, inputEl, onSelect) {
     if (filtered.length === 0) {
       dropdown.innerHTML = `<div class="combo-empty">Keine Vorschläge – Text wird frei übernommen.</div>`;
     } else {
-      filtered.slice(0, 30).forEach(e => {
-        const item = document.createElement("div");
-        item.className = "combo-item";
-        item.innerHTML = `<div class="ci-name">${escapeHtml(e.label)}</div>${e.sub ? `<div class="ci-sub">${escapeHtml(e.sub)}</div>` : ""}`;
-        item.addEventListener("mousedown", (ev) => {
-          ev.preventDefault();
-          inputEl.value = e.value;
-          closeDropdown();
-          onSelect();
-        });
-        dropdown.appendChild(item);
-      });
+      filtered.slice(0, 30).forEach(addItem);
     }
     wrapperEl.appendChild(dropdown);
+
+    if (q.length >= 3) {
+      debounceTimer = setTimeout(() => {
+        fetchNominatimSuggestions(q).then(results => {
+          if (myToken !== requestToken || !dropdown) return; // Feld wurde inzwischen geschlossen/geändert
+          const existingValues = new Set(filtered.map(e => e.value.toLowerCase()));
+          const emptyMsg = dropdown.querySelector(".combo-empty");
+          if (emptyMsg) emptyMsg.remove();
+          results.forEach(r => {
+            if (existingValues.has(r.value.toLowerCase())) return;
+            addItem(r);
+          });
+        });
+      }, 600);
+    }
   }
   inputEl.addEventListener("focus", openDropdown);
   inputEl.addEventListener("click", openDropdown);
@@ -518,10 +615,53 @@ function checkKnownReturnLeg() {
   if (routen[key] != null && !elRueckfahrt.value) {
     rueckfahrtKm = routen[key];
     elRueckfahrt.value = rueckfahrtKm;
+    elRueckHint.textContent = "Bekannte Rückstrecke gefunden – Wert automatisch eingetragen, bei Bedarf anpassen.";
     elRueckHint.classList.remove("hidden");
     updateSummary();
     validateForm();
   }
+}
+
+function autoCalcReturnLeg() {
+  if (formPoints.length < 2 || !settings.orsApiKey) return;
+  const lastOrt = formPoints[formPoints.length - 1].ort;
+  const startOrt = formPoints[0].ort;
+  if (!lastOrt || !startOrt) return;
+  const key = routeKeyOf(lastOrt, startOrt);
+  if (routen[key] != null || rueckfahrtKm) return;
+  calcRouteDistanceKm(lastOrt, startOrt).then(km => {
+    if (km == null) return;
+    if (formPoints[formPoints.length - 1].ort !== lastOrt || formPoints[0].ort !== startOrt) return; // Felder inzwischen geändert
+    if (rueckfahrtKm) return; // Nutzer hat inzwischen selbst etwas eingetragen
+    rueckfahrtKm = km;
+    routen[key] = km;
+    elRueckfahrt.value = km;
+    elRueckHint.textContent = "Strecke automatisch berechnet (OpenRouteService).";
+    elRueckHint.classList.remove("hidden");
+    updateSummary();
+    validateForm();
+    save();
+  });
+}
+
+function autoCalcLeg(idx) {
+  if (!settings.orsApiKey) return;
+  const von = formPoints[idx-1].ort, nach = formPoints[idx].ort;
+  if (!von || !nach) return;
+  const key = routeKeyOf(von, nach);
+  if (routen[key] != null || formKms[idx-1]) return;
+  calcRouteDistanceKm(von, nach).then(km => {
+    if (km == null) return;
+    if (formPoints[idx-1].ort !== von || formPoints[idx].ort !== nach) return; // Felder inzwischen geändert
+    if (formKms[idx-1]) return; // Nutzer hat inzwischen selbst etwas eingetragen
+    formKms[idx-1] = km;
+    routen[key] = km;
+    const kmInput = chainContainer.querySelector(`[data-km-index="${idx-1}"]`);
+    if (kmInput) kmInput.value = km;
+    updateSummary();
+    validateForm();
+    save();
+  });
 }
 
 function totalKm() { return formKms.reduce((a,b) => a + (parseFloat(b) || 0), 0); }
@@ -584,6 +724,10 @@ function renderChain() {
     inputEl.addEventListener("input", () => {
       formPoints[idx].ort = inputEl.value;
       if (idx === formPoints.length - 1) checkKnownReturnLeg();
+    });
+    inputEl.addEventListener("blur", () => {
+      if (idx > 0) autoCalcLeg(idx);
+      if (idx === formPoints.length - 1) autoCalcReturnLeg();
     });
   });
   chainContainer.querySelectorAll("[data-km-index]").forEach(input => {
@@ -1098,11 +1242,25 @@ function closeDetailModal() {
 document.getElementById("stat-week-card").addEventListener("click", openWeekDetail);
 document.getElementById("stat-month-card").addEventListener("click", openMonthDetail);
 
+// ---------- Karten-API Einstellungen ----------
+const elOrsKey = document.getElementById("settings-ors-key");
+const elOrsSave = document.getElementById("settings-ors-save");
+const elOrsStatus = document.getElementById("settings-ors-status");
+const orsStatusDefault = elOrsStatus.textContent;
+
+elOrsSave.addEventListener("click", () => {
+  settings.orsApiKey = elOrsKey.value.trim();
+  save();
+  elOrsStatus.textContent = settings.orsApiKey
+    ? "Gespeichert. Kilometer werden jetzt automatisch berechnet, sobald du ein Adressfeld verlässt."
+    : "API-Key entfernt. " + orsStatusDefault;
+});
+
 // ---------- Export / Import ----------
 const backupStatus = document.getElementById("backup-status");
 
 document.getElementById("export-btn").addEventListener("click", () => {
-  const data = { trips, adressen, routen, exportedAt: new Date().toISOString() };
+  const data = { trips, adressen, routen, geocode: geocodeCache, settings, exportedAt: new Date().toISOString() };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1130,6 +1288,7 @@ document.getElementById("import-file").addEventListener("change", (e) => {
       const importedTrips = data.trips || [];
       const importedAdressen = data.adressen || [];
       const importedRouten = data.routen || {};
+      const importedGeocode = data.geocode || {};
 
       const existingIds = new Set(trips.map(t => t.id));
       importedTrips.forEach(t => { if (!existingIds.has(t.id)) trips.push(t); });
@@ -1139,6 +1298,11 @@ document.getElementById("import-file").addEventListener("change", (e) => {
       importedAdressen.forEach(a => { if (!existingAddrIds.has(a.id)) adressen.push(a); });
 
       Object.assign(routen, importedRouten);
+      Object.assign(geocodeCache, importedGeocode);
+      if (data.settings && data.settings.orsApiKey && !settings.orsApiKey) {
+        settings.orsApiKey = data.settings.orsApiKey;
+        elOrsKey.value = settings.orsApiKey;
+      }
 
       save();
       renderTrips();
@@ -1155,6 +1319,7 @@ document.getElementById("import-file").addEventListener("change", (e) => {
 
 // ---------- init ----------
 load();
+elOrsKey.value = settings.orsApiKey || "";
 renderTrips();
 renderChain();
 validateForm();
