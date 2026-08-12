@@ -227,8 +227,26 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#15181D" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M8 12l3 3 5-6"/></svg>
     </div>
     <h1>Fahrtenbuch</h1>
+    <button class="icon-btn hidden" id="logout-btn" title="Abmelden">⎋</button>
   </header>
 
+  <!-- ANMELDUNG -->
+  <section id="auth-gate" style="padding:24px 20px;">
+    <h2 style="font-size:15px; font-weight:600; margin:0 0 14px;">Anmelden</h2>
+    <div class="group">
+      <label>E-Mail</label>
+      <input type="email" id="auth-email" placeholder="du@example.com">
+    </div>
+    <div class="group">
+      <label>Passwort</label>
+      <input type="password" id="auth-password" placeholder="mind. 6 Zeichen">
+    </div>
+    <button class="btn-primary" id="auth-login-btn">Anmelden</button>
+    <button class="btn-secondary" id="auth-signup-btn" style="margin-top:8px;">Neu registrieren</button>
+    <div class="hint" id="auth-status" style="margin-top:10px;"></div>
+  </section>
+
+  <div id="app-shell" class="hidden">
   <div class="tabs">
     <button class="tab active" data-tab="neu">Neue Fahrt</button>
     <button class="tab" data-tab="fahrten">Fahrten</button>
@@ -314,15 +332,7 @@
       <div id="month-list"></div>
 
       <h2 class="section-title" style="margin-top:20px;">Karten-API</h2>
-      <div class="card-form">
-        <h3>OpenRouteService</h3>
-        <div class="group">
-          <label>API-Key</label>
-          <input id="settings-ors-key" placeholder="z. B. 5b3ce3597851110001cf6248...">
-        </div>
-        <button class="btn-secondary" id="settings-ors-save">Speichern</button>
-        <div class="hint" id="settings-ors-status">Mit Key werden Kilometer zwischen Adressen automatisch berechnet (Adressfeld verlassen genügt). Kostenloser Key unter openrouteservice.org.</div>
-      </div>
+      <div class="hint" style="margin-bottom:16px;">Kilometer zwischen Adressen werden automatisch berechnet (Adressfeld verlassen genügt) – der OpenRouteService-Key liegt zentral auf dem Server, du musst nichts eintragen.</div>
 
       <h2 class="section-title" style="margin-top:20px;">Sicherung</h2>
       <div class="backup-row">
@@ -332,12 +342,21 @@
       <input type="file" id="import-file" accept="application/json" class="hidden">
       <div class="hint" id="backup-status" style="text-align:center; margin-top:8px;"></div>
 
-      <footer class="sub">Alle Daten bleiben lokal in diesem Browser. Exportiere regelmäßig eine Sicherung, um sie auf einem anderen Gerät wiederherzustellen.</footer>
+      <footer class="sub">Deine Daten sind an deinen Account gebunden und über alle Geräte synchron. Exportiere trotzdem regelmäßig eine Sicherung.</footer>
     </section>
   </main>
+  </div>
 </div>
 
-<script>
+<script type="module">
+// ---------- Supabase (Backend: Login + Cloud-Sync + Karten-API-Proxy) ----------
+// TODO: nach dem Anlegen des Supabase-Projekts hier eintragen (Settings > API).
+// Beides sind öffentliche, für den Client bestimmte Werte - unbedenklich im Code.
+const SUPABASE_URL = "";
+const SUPABASE_ANON_KEY = "";
+let supabase = null;   // wird unten per dynamic import gesetzt, sobald das SDK geladen ist
+let currentUser = null;
+
 const MONAT_NAMEN = ["Jan","Feb","Mär","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"];
 const MONAT_NAMEN_LANG = ["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"];
 const STORAGE_KEY = "fahrtenbuch-data-v5";
@@ -347,7 +366,6 @@ let trips = [];
 let adressen = []; // {id, name, adresse}
 let routen = {};   // key "von=>nach" -> km (pro Teilstrecke gemerkt)
 let geocodeCache = {}; // adresse (lowercase) -> {lat, lon}
-let settings = { orsApiKey: "" };
 let hinUndZurueck = true;
 let rueckfahrtKm = 0;
 let expandedMonth = null;
@@ -358,6 +376,8 @@ let formPoints = [{ ort: DEFAULT_START }, { ort: "" }];
 let formKms = [0]; // km je Teilstrecke, length = formPoints.length - 1
 
 // ---------- persistence ----------
+// localStorage dient nur noch als schneller Offline-Zwischenspeicher; die
+// eigentliche Quelle ist Supabase (siehe loadFromSupabase/dbUpsert*).
 function load() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -367,7 +387,6 @@ function load() {
       adressen = data.adressen || [];
       routen = data.routen || {};
       geocodeCache = data.geocode || {};
-      settings = Object.assign({ orsApiKey: "" }, data.settings || {});
       return;
     }
     // Migration v4 (nur ein Ziel, kein stops-array)
@@ -389,13 +408,74 @@ function load() {
   } catch(e) {}
 }
 function save() {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ trips, adressen, routen, geocode: geocodeCache, settings })); } catch(e) {}
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ trips, adressen, routen, geocode: geocodeCache })); } catch(e) {}
 }
 
-// ---------- Karten-APIs (Nominatim Geocoding + OpenRouteService Routing) ----------
-// Beide APIs werden direkt aus dem Browser aufgerufen, ohne eigenen Server.
-// Nominatim: kein Key nötig, Fair-Use-Limit ~1 req/s pro Client.
-// OpenRouteService: kostenloser Key nötig (siehe Übersicht > Karten-API).
+// ---------- Supabase Cloud-Sync ----------
+function rowToTrip(r) {
+  return {
+    id: r.id, datum: r.datum, stops: r.stops, kms: r.kms,
+    start: r.start, ziel: r.ziel, distanzEinfach: Number(r.distanz_einfach),
+    hinUndZurueck: r.hin_und_zurueck,
+    rueckfahrtKm: r.rueckfahrt_km != null ? Number(r.rueckfahrt_km) : 0,
+    gesamt: Number(r.gesamt), notiz: r.notiz || ""
+  };
+}
+function tripToRow(t) {
+  return {
+    id: t.id, user_id: currentUser.id, datum: t.datum, stops: t.stops, kms: t.kms,
+    start: t.start, ziel: t.ziel, distanz_einfach: t.distanzEinfach,
+    hin_und_zurueck: t.hinUndZurueck, rueckfahrt_km: t.rueckfahrtKm,
+    gesamt: t.gesamt, notiz: t.notiz
+  };
+}
+async function loadFromSupabase() {
+  const [tripsRes, adrRes, routenRes, geoRes] = await Promise.all([
+    supabase.from("trips").select("*").order("datum", { ascending: false }),
+    supabase.from("adressen").select("*"),
+    supabase.from("routen").select("*"),
+    supabase.from("geocode_cache").select("*"),
+  ]);
+  trips = (tripsRes.data || []).map(rowToTrip);
+  adressen = (adrRes.data || []).map(r => ({ id: r.id, name: r.name, adresse: r.adresse }));
+  routen = {};
+  (routenRes.data || []).forEach(r => { routen[r.route_key] = Number(r.km); });
+  geocodeCache = {};
+  (geoRes.data || []).forEach(r => { geocodeCache[r.adresse] = { lat: r.lat, lon: r.lon }; });
+  save();
+}
+function dbUpsertTrip(t) {
+  if (!currentUser) return;
+  supabase.from("trips").upsert(tripToRow(t)).then(({ error }) => { if (error) console.error(error); });
+}
+function dbDeleteTrip(id) {
+  if (!currentUser) return;
+  supabase.from("trips").delete().eq("id", id).then(({ error }) => { if (error) console.error(error); });
+}
+function dbUpsertAddr(a) {
+  if (!currentUser) return;
+  supabase.from("adressen").upsert({ id: a.id, user_id: currentUser.id, name: a.name, adresse: a.adresse })
+    .then(({ error }) => { if (error) console.error(error); });
+}
+function dbDeleteAddr(id) {
+  if (!currentUser) return;
+  supabase.from("adressen").delete().eq("id", id).then(({ error }) => { if (error) console.error(error); });
+}
+function dbUpsertRoute(key, km) {
+  if (!currentUser) return;
+  supabase.from("routen").upsert({ user_id: currentUser.id, route_key: key, km })
+    .then(({ error }) => { if (error) console.error(error); });
+}
+function dbUpsertGeocode(adresse, coord) {
+  if (!currentUser) return;
+  supabase.from("geocode_cache").upsert({ user_id: currentUser.id, adresse, lat: coord.lat, lon: coord.lon })
+    .then(({ error }) => { if (error) console.error(error); });
+}
+
+// ---------- Karten-APIs ----------
+// Nominatim (Geocoding): direkt aus dem Browser, kein Key nötig, Fair-Use ~1 req/s.
+// OpenRouteService (Routing): läuft über die Supabase Edge Function "route-distance",
+// der Key liegt nur dort als Server-Secret.
 function fetchNominatimSuggestions(query) {
   const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=0&limit=5&q=${encodeURIComponent(query)}`;
   return fetch(url)
@@ -425,6 +505,7 @@ function geocode(address) {
       const coord = { lat: parseFloat(results[0].lat), lon: parseFloat(results[0].lon) };
       geocodeCache[key] = coord;
       save();
+      dbUpsertGeocode(key, coord);
       return coord;
     })
     .catch(() => null)
@@ -435,17 +516,21 @@ function geocode(address) {
 }
 
 function calcRouteDistanceKm(von, nach) {
-  if (!settings.orsApiKey) return Promise.resolve(null);
+  if (!currentUser) return Promise.resolve(null);
   return Promise.all([geocode(von), geocode(nach)]).then(([a, b]) => {
     if (!a || !b) return null;
-    const url = `https://api.openrouteservice.org/v2/directions/driving-car?api_key=${encodeURIComponent(settings.orsApiKey)}&start=${a.lon},${a.lat}&end=${b.lon},${b.lat}`;
-    return fetch(url)
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        const meters = data && data.features && data.features[0] && data.features[0].properties.summary.distance;
-        return meters != null ? Math.round(meters / 100) / 10 : null;
+    return supabase.auth.getSession().then(({ data }) => {
+      const token = data && data.session && data.session.access_token;
+      if (!token) return null;
+      return fetch(`${SUPABASE_URL}/functions/v1/route-distance`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ start: a, end: b })
       })
-      .catch(() => null);
+        .then(r => r.ok ? r.json() : null)
+        .then(result => result && result.km != null ? result.km : null)
+        .catch(() => null);
+    });
   });
 }
 
@@ -517,7 +602,12 @@ function attachCombo(wrapperEl, inputEl, onSelect) {
     item.addEventListener("mousedown", (ev) => {
       ev.preventDefault();
       inputEl.value = entry.value;
-      if (entry.coord) geocodeCache[entry.value.trim().toLowerCase()] = entry.coord;
+      if (entry.coord) {
+        const gKey = entry.value.trim().toLowerCase();
+        geocodeCache[gKey] = entry.coord;
+        save();
+        dbUpsertGeocode(gKey, entry.coord);
+      }
       closeDropdown();
       onSelect();
     });
@@ -623,7 +713,7 @@ function checkKnownReturnLeg() {
 }
 
 function autoCalcReturnLeg() {
-  if (formPoints.length < 2 || !settings.orsApiKey) return;
+  if (formPoints.length < 2 || !currentUser) return;
   const lastOrt = formPoints[formPoints.length - 1].ort;
   const startOrt = formPoints[0].ort;
   if (!lastOrt || !startOrt) return;
@@ -635,6 +725,7 @@ function autoCalcReturnLeg() {
     if (rueckfahrtKm) return; // Nutzer hat inzwischen selbst etwas eingetragen
     rueckfahrtKm = km;
     routen[key] = km;
+    dbUpsertRoute(key, km);
     elRueckfahrt.value = km;
     elRueckHint.textContent = "Strecke automatisch berechnet (OpenRouteService).";
     elRueckHint.classList.remove("hidden");
@@ -645,7 +736,7 @@ function autoCalcReturnLeg() {
 }
 
 function autoCalcLeg(idx) {
-  if (!settings.orsApiKey) return;
+  if (!currentUser) return;
   const von = formPoints[idx-1].ort, nach = formPoints[idx].ort;
   if (!von || !nach) return;
   const key = routeKeyOf(von, nach);
@@ -656,6 +747,7 @@ function autoCalcLeg(idx) {
     if (formKms[idx-1]) return; // Nutzer hat inzwischen selbst etwas eingetragen
     formKms[idx-1] = km;
     routen[key] = km;
+    dbUpsertRoute(key, km);
     const kmInput = chainContainer.querySelector(`[data-km-index="${idx-1}"]`);
     if (kmInput) kmInput.value = km;
     updateSummary();
@@ -794,14 +886,21 @@ elSubmit.addEventListener("click", () => {
   if (hinUndZurueck && (!rueckfahrtKm || rueckfahrtKm <= 0)) return;
 
   for (let i = 1; i < stops.length; i++) {
-    routen[routeKeyOf(stops[i-1].ort, stops[i].ort)] = kms[i-1];
+    const legKey = routeKeyOf(stops[i-1].ort, stops[i].ort);
+    routen[legKey] = kms[i-1];
+    dbUpsertRoute(legKey, kms[i-1]);
   }
   const total = kms.reduce((a,b)=>a+b,0);
   const start = stops[0].ort;
   const ziel = stops[stops.length-1].ort;
   const rueck = hinUndZurueck ? rueckfahrtKm : 0;
-  if (hinUndZurueck) routen[routeKeyOf(ziel, start)] = rueck;
+  if (hinUndZurueck) {
+    const retKey = routeKeyOf(ziel, start);
+    routen[retKey] = rueck;
+    dbUpsertRoute(retKey, rueck);
+  }
 
+  let savedTrip;
   if (editingTripId) {
     const t = trips.find(x => x.id === editingTripId);
     if (t) {
@@ -811,9 +910,10 @@ elSubmit.addEventListener("click", () => {
       t.rueckfahrtKm = rueck;
       t.gesamt = total + rueck;
       t.notiz = elNotiz.value.trim();
+      savedTrip = t;
     }
   } else {
-    trips.unshift({
+    savedTrip = {
       id: Date.now().toString(),
       datum: elDatum.value || todayISO(),
       stops, kms, start, ziel,
@@ -822,9 +922,11 @@ elSubmit.addEventListener("click", () => {
       rueckfahrtKm: rueck,
       gesamt: total + rueck,
       notiz: elNotiz.value.trim()
-    });
+    };
+    trips.unshift(savedTrip);
   }
   save();
+  if (savedTrip) dbUpsertTrip(savedTrip);
   resetTripForm();
   document.querySelector('.tab[data-tab="fahrten"]').click();
 });
@@ -891,6 +993,7 @@ function renderTrips() {
     btn.addEventListener("click", () => {
       trips = trips.filter(t => t.id !== btn.dataset.del);
       save();
+      dbDeleteTrip(btn.dataset.del);
       renderTrips();
     });
   });
@@ -988,7 +1091,7 @@ function confirmDuplicate() {
   if (!t) { closeDuplicateModal(); return; }
   const validDates = dupDates.filter(Boolean);
   validDates.forEach((datum, i) => {
-    trips.unshift({
+    const neu = {
       id: (Date.now() + i).toString(),
       datum,
       stops: (t.stops || [{ort:t.start},{ort:t.ziel}]).map(s => ({ ort: s.ort })),
@@ -999,7 +1102,9 @@ function confirmDuplicate() {
       rueckfahrtKm: t.rueckfahrtKm != null ? t.rueckfahrtKm : (t.hinUndZurueck ? t.distanzEinfach : 0),
       gesamt: t.gesamt,
       notiz: t.notiz
-    });
+    };
+    trips.unshift(neu);
+    dbUpsertTrip(neu);
   });
   save();
   closeDuplicateModal();
@@ -1019,13 +1124,16 @@ aSubmit.addEventListener("click", () => {
   const adresse = aAdresse.value.trim();
   if (!name || !adresse) return;
 
+  let savedAddr;
   if (aEditId.value) {
     const a = adressen.find(x => x.id === aEditId.value);
-    if (a) { a.name = name; a.adresse = adresse; }
+    if (a) { a.name = name; a.adresse = adresse; savedAddr = a; }
   } else {
-    adressen.push({ id: "adr_" + Date.now(), name, adresse });
+    savedAddr = { id: "adr_" + Date.now(), name, adresse };
+    adressen.push(savedAddr);
   }
   save();
+  if (savedAddr) dbUpsertAddr(savedAddr);
   resetAddrForm();
   renderAdressen();
 });
@@ -1069,6 +1177,7 @@ function renderAdressen() {
     btn.addEventListener("click", () => {
       adressen = adressen.filter(x => x.id !== btn.dataset.del);
       save();
+      dbDeleteAddr(btn.dataset.del);
       renderAdressen();
     });
   });
@@ -1228,6 +1337,7 @@ function renderDetailModal(opts) {
     btn.addEventListener("click", () => {
       trips = trips.filter(t => t.id !== btn.dataset.detailDel);
       save();
+      dbDeleteTrip(btn.dataset.detailDel);
       renderUebersicht();
       opts.reopen();
     });
@@ -1242,25 +1352,11 @@ function closeDetailModal() {
 document.getElementById("stat-week-card").addEventListener("click", openWeekDetail);
 document.getElementById("stat-month-card").addEventListener("click", openMonthDetail);
 
-// ---------- Karten-API Einstellungen ----------
-const elOrsKey = document.getElementById("settings-ors-key");
-const elOrsSave = document.getElementById("settings-ors-save");
-const elOrsStatus = document.getElementById("settings-ors-status");
-const orsStatusDefault = elOrsStatus.textContent;
-
-elOrsSave.addEventListener("click", () => {
-  settings.orsApiKey = elOrsKey.value.trim();
-  save();
-  elOrsStatus.textContent = settings.orsApiKey
-    ? "Gespeichert. Kilometer werden jetzt automatisch berechnet, sobald du ein Adressfeld verlässt."
-    : "API-Key entfernt. " + orsStatusDefault;
-});
-
 // ---------- Export / Import ----------
 const backupStatus = document.getElementById("backup-status");
 
 document.getElementById("export-btn").addEventListener("click", () => {
-  const data = { trips, adressen, routen, geocode: geocodeCache, settings, exportedAt: new Date().toISOString() };
+  const data = { trips, adressen, routen, geocode: geocodeCache, exportedAt: new Date().toISOString() };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1291,18 +1387,16 @@ document.getElementById("import-file").addEventListener("change", (e) => {
       const importedGeocode = data.geocode || {};
 
       const existingIds = new Set(trips.map(t => t.id));
-      importedTrips.forEach(t => { if (!existingIds.has(t.id)) trips.push(t); });
+      importedTrips.forEach(t => { if (!existingIds.has(t.id)) { trips.push(t); dbUpsertTrip(t); } });
       trips.sort((a,b) => a.datum < b.datum ? 1 : -1);
 
       const existingAddrIds = new Set(adressen.map(a => a.id));
-      importedAdressen.forEach(a => { if (!existingAddrIds.has(a.id)) adressen.push(a); });
+      importedAdressen.forEach(a => { if (!existingAddrIds.has(a.id)) { adressen.push(a); dbUpsertAddr(a); } });
 
       Object.assign(routen, importedRouten);
+      Object.keys(importedRouten).forEach(k => dbUpsertRoute(k, importedRouten[k]));
       Object.assign(geocodeCache, importedGeocode);
-      if (data.settings && data.settings.orsApiKey && !settings.orsApiKey) {
-        settings.orsApiKey = data.settings.orsApiKey;
-        elOrsKey.value = settings.orsApiKey;
-      }
+      Object.keys(importedGeocode).forEach(k => dbUpsertGeocode(k, importedGeocode[k]));
 
       save();
       renderTrips();
@@ -1317,9 +1411,74 @@ document.getElementById("import-file").addEventListener("change", (e) => {
   reader.readAsText(file);
 });
 
+// ---------- Auth (Login/Registrierung + Gate) ----------
+const elAuthGate = document.getElementById("auth-gate");
+const elAppShell = document.getElementById("app-shell");
+const elAuthEmail = document.getElementById("auth-email");
+const elAuthPassword = document.getElementById("auth-password");
+const elAuthStatus = document.getElementById("auth-status");
+const elLogoutBtn = document.getElementById("logout-btn");
+const elAuthLoginBtn = document.getElementById("auth-login-btn");
+const elAuthSignupBtn = document.getElementById("auth-signup-btn");
+
+async function initSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    elAuthStatus.textContent = "Backend noch nicht konfiguriert (SUPABASE_URL/SUPABASE_ANON_KEY fehlen im Code).";
+    elAuthLoginBtn.disabled = true;
+    elAuthSignupBtn.disabled = true;
+    return;
+  }
+  let createClient;
+  try {
+    ({ createClient } = await import("https://esm.sh/@supabase/supabase-js@2"));
+  } catch (e) {
+    console.error(e);
+    elAuthStatus.textContent = "Verbindung zum Server-SDK fehlgeschlagen. Bitte Seite neu laden oder später erneut versuchen.";
+    elAuthLoginBtn.disabled = true;
+    elAuthSignupBtn.disabled = true;
+    return;
+  }
+  supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  elAuthLoginBtn.addEventListener("click", async () => {
+    elAuthStatus.textContent = "Anmelden…";
+    const { error } = await supabase.auth.signInWithPassword({
+      email: elAuthEmail.value.trim(), password: elAuthPassword.value
+    });
+    elAuthStatus.textContent = error ? error.message : "";
+  });
+  elAuthSignupBtn.addEventListener("click", async () => {
+    elAuthStatus.textContent = "Registrieren…";
+    const { error } = await supabase.auth.signUp({
+      email: elAuthEmail.value.trim(), password: elAuthPassword.value
+    });
+    elAuthStatus.textContent = error ? error.message : "Account erstellt – ggf. E-Mail bestätigen, dann anmelden.";
+  });
+  elLogoutBtn.addEventListener("click", () => supabase.auth.signOut());
+
+  supabase.auth.onAuthStateChange(async (event, session) => {
+    currentUser = session ? session.user : null;
+    if (currentUser) {
+      elAuthGate.classList.add("hidden");
+      elAppShell.classList.remove("hidden");
+      elLogoutBtn.classList.remove("hidden");
+      try { await loadFromSupabase(); } catch (e) { console.error(e); }
+      renderTrips();
+      renderAdressen();
+      renderUebersicht();
+      renderChain();
+      validateForm();
+    } else {
+      elAuthGate.classList.remove("hidden");
+      elAppShell.classList.add("hidden");
+      elLogoutBtn.classList.add("hidden");
+    }
+  });
+}
+initSupabase();
+
 // ---------- init ----------
-load();
-elOrsKey.value = settings.orsApiKey || "";
+load(); // sofortige Offline-Anzeige aus dem letzten Sync, bis Supabase antwortet
 renderTrips();
 renderChain();
 validateForm();
